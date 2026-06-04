@@ -2,6 +2,7 @@ package tg
 
 import (
 	"context"
+	"net/http"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
 )
@@ -12,9 +13,19 @@ type Bot struct {
 	adminID int64
 }
 
-// New connects to Telegram and returns a Bot.
-func New(token string, adminID int64) (*Bot, error) {
-	api, err := tgbotapi.NewBotAPI(token)
+// New connects to Telegram and returns a Bot. If client is non-nil it is used
+// for all API calls (e.g. to route through a proxy); otherwise a direct
+// connection is used.
+func New(token string, adminID int64, client *http.Client) (*Bot, error) {
+	var (
+		api *tgbotapi.BotAPI
+		err error
+	)
+	if client != nil {
+		api, err = tgbotapi.NewBotAPIWithClient(token, tgbotapi.APIEndpoint, client)
+	} else {
+		api, err = tgbotapi.NewBotAPI(token)
+	}
 	if err != nil {
 		return nil, err
 	}

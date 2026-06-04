@@ -23,6 +23,15 @@ func main() {
 	}
 	logger.Printf("config: %s", cfg)
 
+	// Validate the proxy config early so a malformed TG_PROXY_URL fails fast.
+	tgClient, err := cfg.TGHTTPClient()
+	if err != nil {
+		logger.Fatalf("tg proxy: %v", err)
+	}
+	if tgClient != nil {
+		logger.Printf("telegram via proxy %s", cfg.TGProxyRedacted())
+	}
+
 	st, err := store.Open(cfg.DBPath)
 	if err != nil {
 		logger.Fatalf("store: %v", err)
@@ -34,7 +43,7 @@ func main() {
 		logger.Fatalf("vk: %v", err)
 	}
 
-	tgb, err := tg.New(cfg.TGToken, cfg.TGAdminID)
+	tgb, err := tg.New(cfg.TGToken, cfg.TGAdminID, tgClient)
 	if err != nil {
 		logger.Fatalf("tg: %v", err)
 	}

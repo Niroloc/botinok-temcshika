@@ -3,6 +3,8 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -15,6 +17,11 @@ type Config struct {
 
 	TGToken   string
 	TGAdminID int64
+
+	// Optional proxy for the Telegram connection (http/https/socks5).
+	TGProxyURL  string
+	TGProxyUser string
+	TGProxyPass string
 
 	VKToken   string
 	VKGroupID int   // community id; 0 = auto-detect via groups.getById
@@ -30,6 +37,9 @@ func Load() (*Config, error) {
 	c := &Config{
 		DBPath:      env("BOT_DB_PATH", "./data/bot.db"),
 		TGToken:     os.Getenv("TG_BOT_TOKEN"),
+		TGProxyURL:  strings.TrimSpace(os.Getenv("TG_PROXY_URL")),
+		TGProxyUser: os.Getenv("TG_PROXY_USER"),
+		TGProxyPass: os.Getenv("TG_PROXY_PASS"),
 		VKToken:     os.Getenv("VK_TOKEN"),
 		PollRefresh: envDuration("POLL_REFRESH_SEC", 30*time.Second),
 		LinkCodeTTL: envDuration("LINK_CODE_TTL_MIN", 30*time.Minute),
@@ -97,8 +107,52 @@ func envDuration(key string, def time.Duration) time.Duration {
 	return time.Duration(n) * time.Second
 }
 
+// TGHTTPClient builds an *http.Client routed through the configured proxy for
+// the Telegram connection. Returns (nil, nil) when no proxy is configured, in
+// which case the caller should use a direct connection.
+//
+// Credentials may be embedded in TG_PROXY_URL (http://user:pass@host:port) or
+// supplied separately via TG_PROXY_USER / TG_PROXY_PASS.
+func (c *Config) TGHTTPClient() (*http.Client, error) {
+	if c.TGProxyURL == "" {
+		return nil, nil
+	}
+	u, err := url.Parse(c.TGProxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse TG_PROXY_URL: %w", err)
+	}
+	if u.Scheme == "" || u.Host == "" {
+		return nil, fmt.Errorf("TG_PROXY_URL must be like scheme://host:port, got %q", c.TGProxyURL)
+	}
+	if u.User == nil && c.TGProxyUser != "" {
+		if c.TGProxyPass != "" {
+			u.User = url.UserPassword(c.TGProxyUser, c.TGProxyPass)
+		} else {
+			u.User = url.User(c.TGProxyUser)
+		}
+	}
+	// No client Timeout: Telegram getUpdates uses long polling (~30s held open).
+	transport := &http.Transport{Proxy: http.ProxyURL(u)}
+	return &http.Client{Transport: transport}, nil
+}
+
+// TGProxyRedacted returns the proxy URL with any password masked, safe for logs.
+func (c *Config) TGProxyRedacted() string {
+	if c.TGProxyURL == "" {
+		return ""
+	}
+	if u, err := url.Parse(c.TGProxyURL); err == nil {
+		return u.Redacted()
+	}
+	return "(set)"
+}
+
 // String renders a redacted summary for logging.
 func (c *Config) String() string {
-	return fmt.Sprintf("db=%s admin=%d vk_group=%d vk_peer=%d tags=%v refresh=%s",
-		c.DBPath, c.TGAdminID, c.VKGroupID, c.VKPeerID, c.MentionTags, c.PollRefresh)
+	proxy := "off"
+	if c.TGProxyURL != "" {
+		proxy = "on"
+	}
+	return fmt.Sprintf("db=%s admin=%d vk_group=%d vk_peer=%d tags=%v refresh=%s tg_proxy=%s",
+		c.DBPath, c.TGAdminID, c.VKGroupID, c.VKPeerID, c.MentionTags, c.PollRefresh, proxy)
 }
