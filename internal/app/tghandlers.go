@@ -27,11 +27,13 @@ func (a *App) handleTGMessage(msg *tgbotapi.Message) {
 	if err != nil {
 		a.log.Printf("upsert tg user: %v", err)
 	}
-	if created && isAdmin {
-		_ = a.st.SetStatus(from, store.StatusApproved)
-	}
-	if created && !isAdmin {
-		a.notifyAdminNewUser(msg.From)
+	// The admin is intentionally NOT auto-approved: they walk the normal user
+	// path (pending → approved) and self-approve via /pending or /approve.
+	// Admin powers come from isAdmin and work regardless of approval status.
+	if created {
+		if !isAdmin {
+			a.notifyAdminNewUser(msg.From)
+		}
 		_, _ = a.tg.SendText(from, "👋 Заявка на доступ отправлена администратору. Ожидайте одобрения.")
 		// fall through so /start etc. still get a reply
 	}
