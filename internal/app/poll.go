@@ -71,9 +71,14 @@ func (a *App) syncPoll(pollID int64) {
 	if err != nil || p == nil || p.Status != store.PollActive {
 		return
 	}
-	ps, err := a.vk.GetPoll(p.VKOwnerID, p.VKPollID)
+	ps, err := a.fetchPollState(p)
 	if err != nil {
-		a.log.Printf("get poll %d: %v", pollID, err)
+		// Neither path worked. Don't give up on finishing: fall back to the
+		// end_date captured at creation and close on time with the last snapshot.
+		a.log.Printf("sync poll %d (cached state, %v)", pollID, err)
+		if p.EndDate > 0 && time.Now().Unix() >= p.EndDate {
+			a.closePoll(p, "⏱ Голосование завершено.")
+		}
 		return
 	}
 
@@ -89,6 +94,20 @@ func (a *App) syncPoll(pollID int64) {
 		return
 	}
 	a.refreshPollMessages(pollID)
+}
+
+// fetchPollState gets the current poll state from VK, preferring a re-fetch of
+// the chat message (works on conversation-message access alone) and falling back
+// to polls.getById (which may be denied for a user-owned poll).
+func (a *App) fetchPollState(p *store.Poll) (*vk.PollState, error) {
+	if p.VKCMID > 0 {
+		ps, err := a.vk.GetPollFromMessage(p.VKPeerID, p.VKCMID)
+		if err == nil {
+			return ps, nil
+		}
+		a.log.Printf("poll %d via message failed, trying polls.getById: %v", p.ID, err)
+	}
+	return a.vk.GetPoll(p.VKOwnerID, p.VKPollID)
 }
 
 // buildTally loads the current merged result for a poll.

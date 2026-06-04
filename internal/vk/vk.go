@@ -157,6 +157,29 @@ func (c *Client) GetPoll(ownerID, pollID int64) (*PollState, error) {
 	return convertPoll(object.PollsPoll(resp)), nil
 }
 
+// GetPollFromMessage re-fetches the chat message holding the poll and returns
+// the poll's current state from its attachment. This relies only on access to
+// the conversation's messages (which a bot added to the chat has), so it works
+// even when polls.getById is denied for a user-owned poll. Returns an error if
+// the message can't be fetched or no longer carries a poll attachment.
+func (c *Client) GetPollFromMessage(peerID, cmid int64) (*PollState, error) {
+	resp, err := c.api.MessagesGetByConversationMessageID(api.Params{
+		"peer_id":                  peerID,
+		"conversation_message_ids": cmid,
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, m := range resp.Items {
+		for _, att := range m.Attachments {
+			if att.Type == "poll" {
+				return convertPoll(att.Poll), nil
+			}
+		}
+	}
+	return nil, fmt.Errorf("poll attachment not found in peer=%d cmid=%d", peerID, cmid)
+}
+
 // GetVoters returns vk_answer_id -> []vk_user_id for the given answers.
 // ok=false means voters are not accessible (anonymous poll or no permission);
 // the caller should fall back to additive (non-deduplicated) counting.
