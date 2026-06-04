@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"fmt"
+	"io"
 	"math/big"
 	"strings"
 
@@ -45,14 +46,17 @@ type Answer struct {
 
 // Client wraps the VK API and Bots Long Poll.
 type Client struct {
-	api     *api.VK
-	lp      *longpoll.LongPoll
-	groupID int
-	onMsg   func(Message)
+	api      *api.VK
+	votersVK *api.VK // optional user-token client for polls.getVoters; nil = none
+	lp       *longpoll.LongPoll
+	groupID  int
+	onMsg    func(Message)
 }
 
-// New builds a VK client. If groupID is 0 it is auto-detected from the token.
-func New(token string, groupID int) (*Client, error) {
+// New builds a VK client from a community token. If groupID is 0 it is
+// auto-detected. userToken, when non-empty, is used ONLY for polls.getVoters
+// (that method is unavailable with group auth) to enable vote dedup.
+func New(token string, groupID int, userToken string) (*Client, error) {
 	vk := api.NewVK(token)
 
 	if groupID == 0 {
@@ -72,6 +76,9 @@ func New(token string, groupID int) (*Client, error) {
 	}
 
 	c := &Client{api: vk, lp: lp, groupID: groupID}
+	if userToken != "" {
+		c.votersVK = api.NewVK(userToken)
+	}
 	lp.MessageNew(func(_ context.Context, obj events.MessageNewObject) {
 		if c.onMsg != nil {
 			c.onMsg(convert(obj.Message))
@@ -184,14 +191,16 @@ func (c *Client) GetPollFromMessage(peerID, cmid int64) (*PollState, error) {
 // ok=false means voters are not accessible (anonymous poll or no permission);
 // the caller should fall back to additive (non-deduplicated) counting.
 func (c *Client) GetVoters(ownerID, pollID int64, answerIDs []int64) (map[int64][]int64, bool) {
-	if len(answerIDs) == 0 {
+	// polls.getVoters is unavailable with group auth, so without a user token
+	// there is nothing to try — fall straight back to additive tallying.
+	if c.votersVK == nil || len(answerIDs) == 0 {
 		return nil, false
 	}
 	ids := make([]string, len(answerIDs))
 	for i, a := range answerIDs {
 		ids[i] = fmt.Sprintf("%d", a)
 	}
-	resp, err := c.api.PollsGetVoters(api.Params{
+	resp, err := c.votersVK.PollsGetVoters(api.Params{
 		"owner_id":   ownerID,
 		"poll_id":    pollID,
 		"answer_ids": strings.Join(ids, ","),
@@ -214,6 +223,31 @@ func (c *Client) SendMessage(peerID int64, text string) error {
 		"peer_id":   peerID,
 		"message":   text,
 		"random_id": randomID(),
+	})
+	return err
+}
+
+// SendPhoto uploads a photo into a VK peer (chat) with an optional caption.
+// It runs the full messages-photo upload flow (getMessagesUploadServer ->
+// upload -> saveMessagesPhoto) and attaches the result to messages.send.
+func (c *Client) SendPhoto(peerID int64, caption string, photo io.Reader) error {
+	saved, err := c.api.UploadMessagesPhoto(int(peerID), photo)
+	if err != nil {
+		return err
+	}
+	if len(saved) == 0 {
+		return fmt.Errorf("vk: empty photo save response")
+	}
+	p := saved[0]
+	att := fmt.Sprintf("photo%d_%d", p.OwnerID, p.ID)
+	if p.AccessKey != "" {
+		att += "_" + p.AccessKey
+	}
+	_, err = c.api.MessagesSend(api.Params{
+		"peer_id":    peerID,
+		"message":    caption,
+		"attachment": att,
+		"random_id":  randomID(),
 	})
 	return err
 }

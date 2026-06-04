@@ -24,8 +24,12 @@ type Config struct {
 	TGProxyPass string
 
 	VKToken   string
-	VKGroupID int   // community id; 0 = auto-detect via groups.getById
-	VKPeerID  int   // chat peer to watch (e.g. 2000000001); 0 = all peers the bot sees
+	// Optional user token used ONLY for polls.getVoters (read-only), to enable
+	// cross-platform vote dedup. polls.getVoters is unavailable with group auth.
+	// Empty = additive (non-deduplicated) tally.
+	VKUserToken string
+	VKGroupID   int // community id; 0 = auto-detect via groups.getById
+	VKPeerID    int // chat peer to watch (e.g. 2000000001); 0 = all peers the bot sees
 	MentionTags []string // case-insensitive substrings that trigger an @all broadcast
 
 	PollRefresh time.Duration // how often active polls are re-synced from VK
@@ -41,6 +45,7 @@ func Load() (*Config, error) {
 		TGProxyUser: os.Getenv("TG_PROXY_USER"),
 		TGProxyPass: os.Getenv("TG_PROXY_PASS"),
 		VKToken:     os.Getenv("VK_TOKEN"),
+		VKUserToken: strings.TrimSpace(os.Getenv("VK_USER_TOKEN")),
 		PollRefresh: envDuration("POLL_REFRESH_SEC", 30*time.Second),
 		LinkCodeTTL: envDuration("LINK_CODE_TTL_MIN", 30*time.Minute),
 	}
@@ -153,6 +158,10 @@ func (c *Config) String() string {
 	if c.TGProxyURL != "" {
 		proxy = "on"
 	}
-	return fmt.Sprintf("db=%s admin=%d vk_group=%d vk_peer=%d tags=%v refresh=%s tg_proxy=%s",
-		c.DBPath, c.TGAdminID, c.VKGroupID, c.VKPeerID, c.MentionTags, c.PollRefresh, proxy)
+	dedup := "additive"
+	if c.VKUserToken != "" {
+		dedup = "user-token"
+	}
+	return fmt.Sprintf("db=%s admin=%d vk_group=%d vk_peer=%d tags=%v refresh=%s tg_proxy=%s dedup=%s",
+		c.DBPath, c.TGAdminID, c.VKGroupID, c.VKPeerID, c.MentionTags, c.PollRefresh, proxy, dedup)
 }

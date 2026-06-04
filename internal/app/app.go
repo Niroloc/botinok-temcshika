@@ -4,6 +4,7 @@ import (
 	"context"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/botinok/temcshika/internal/config"
@@ -19,6 +20,9 @@ type App struct {
 	vk  *vk.Client
 	tg  *tg.Bot
 	log *log.Logger
+
+	mu           sync.Mutex
+	lastChatPeer int64 // most recent VK chat peer seen; reverse-forward target when VK_PEER_ID=0
 }
 
 // New constructs the application.
@@ -78,6 +82,14 @@ func (a *App) pollSyncLoop(ctx context.Context) {
 
 // handleVKMessage dispatches an inbound VK chat message.
 func (a *App) handleVKMessage(m vk.Message) {
+	// Remember the chat peer so TG->VK forwarding has a target even when
+	// VK_PEER_ID is not pinned. Chat (beseda) peers are >= 2000000000.
+	if m.PeerID >= 2000000000 {
+		a.mu.Lock()
+		a.lastChatPeer = m.PeerID
+		a.mu.Unlock()
+	}
+
 	// Optional peer filter.
 	if a.cfg.VKPeerID != 0 && m.PeerID != int64(a.cfg.VKPeerID) {
 		// Still allow link codes from DMs to the community.
@@ -94,6 +106,17 @@ func (a *App) handleVKMessage(m vk.Message) {
 	}
 
 	a.tryConsumeLinkCode(m)
+}
+
+// targetVKPeer returns the VK chat peer for TG->VK forwarding: the pinned
+// VK_PEER_ID if set, otherwise the most recently seen chat peer (0 if unknown).
+func (a *App) targetVKPeer() int64 {
+	if a.cfg.VKPeerID != 0 {
+		return int64(a.cfg.VKPeerID)
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lastChatPeer
 }
 
 func (a *App) containsMention(text string) bool {

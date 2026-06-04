@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"fmt"
 	"strconv"
 	"strings"
@@ -39,6 +40,7 @@ func (a *App) handleTGMessage(msg *tgbotapi.Message) {
 	}
 
 	if !msg.IsCommand() {
+		a.forwardToVK(msg)
 		return
 	}
 
@@ -100,6 +102,83 @@ func (a *App) sendStatus(tgID int64, user *store.TGUser) {
 		link = fmt.Sprintf("VK id %d", user.VKUserID.Int64)
 	}
 	_, _ = a.tg.SendText(tgID, fmt.Sprintf("Статус: %s\nVK: %s", user.Status, link))
+}
+
+// forwardToVK relays a plain (non-command) message from an approved TG user into
+// the VK chat, signed with the sender's name. Forwards text, and re-uploads a
+// photo (largest size) with the signed caption. Other media kinds are not
+// bridged; the sender is told so.
+func (a *App) forwardToVK(msg *tgbotapi.Message) {
+	user, _ := a.st.GetTGUser(msg.From.ID)
+	if user == nil || user.Status != store.StatusApproved {
+		return // only approved users bridge into VK
+	}
+
+	peer := a.targetVKPeer()
+	if peer == 0 {
+		a.log.Printf("reverse forward: no target VK peer yet (set VK_PEER_ID)")
+		_, _ = a.tg.SendText(msg.From.ID,
+			"⚠️ Пока не знаю, в какую беседу пересылать. Задайте VK_PEER_ID или дождитесь сообщения из беседы.")
+		return
+	}
+
+	text := strings.TrimSpace(msg.Text)
+	if text == "" {
+		text = strings.TrimSpace(msg.Caption)
+	}
+	signed := "💬 " + tgDisplayName(msg.From) + " (TG):"
+	if text != "" {
+		signed += "\n" + text
+	}
+
+	// Photo: re-upload the largest size with the signed caption.
+	if len(msg.Photo) > 0 {
+		fileID := msg.Photo[len(msg.Photo)-1].FileID // last entry = largest size
+		data, err := a.tg.DownloadFile(fileID)
+		if err != nil {
+			a.log.Printf("reverse forward: download tg photo: %v", err)
+		} else if err := a.vk.SendPhoto(peer, signed, bytes.NewReader(data)); err != nil {
+			a.log.Printf("reverse forward: vk send photo: %v", err)
+		} else {
+			a.noteUnsupportedMedia(msg)
+			return // photo (+caption) delivered
+		}
+		// download/upload failed — fall back to forwarding the text below
+	}
+
+	if text == "" {
+		if len(msg.Photo) > 0 {
+			_, _ = a.tg.SendText(msg.From.ID, "⚠️ Не удалось переслать фото в VK-беседу.")
+		}
+		return // nothing textual to forward (sticker / unsupported media)
+	}
+
+	if err := a.vk.SendMessage(peer, signed); err != nil {
+		a.log.Printf("reverse forward to vk peer %d: %v", peer, err)
+		_, _ = a.tg.SendText(msg.From.ID, "⚠️ Не удалось отправить сообщение в VK-беседу.")
+		return
+	}
+	a.noteUnsupportedMedia(msg)
+}
+
+// noteUnsupportedMedia warns the sender about TG media kinds not bridged to VK.
+func (a *App) noteUnsupportedMedia(msg *tgbotapi.Message) {
+	if msg.Document != nil || msg.Video != nil || msg.Voice != nil || msg.Audio != nil {
+		_, _ = a.tg.SendText(msg.From.ID,
+			"ℹ️ Текст/фото переслано; видео/файлы/аудио/голосовые TG→VK пока не поддерживаются.")
+	}
+}
+
+// tgDisplayName builds a human label for a Telegram user.
+func tgDisplayName(u *tgbotapi.User) string {
+	name := strings.TrimSpace(u.FirstName + " " + u.LastName)
+	if name == "" {
+		name = u.UserName
+	}
+	if name == "" {
+		name = fmt.Sprintf("id%d", u.ID)
+	}
+	return name
 }
 
 // ---------------------------------------------------------------------------

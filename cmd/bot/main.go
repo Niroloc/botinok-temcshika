@@ -38,7 +38,7 @@ func main() {
 	}
 	defer st.Close()
 
-	vkc, err := vk.New(cfg.VKToken, cfg.VKGroupID)
+	vkc, err := vk.New(cfg.VKToken, cfg.VKGroupID, cfg.VKUserToken)
 	if err != nil {
 		logger.Fatalf("vk: %v", err)
 	}

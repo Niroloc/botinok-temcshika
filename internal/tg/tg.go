@@ -2,6 +2,8 @@ package tg
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"net/http"
 
 	tgbotapi "github.com/go-telegram-bot-api/telegram-bot-api/v5"
@@ -97,6 +99,28 @@ func (b *Bot) EditTextStripKeyboard(chatID int64, messageID int, text string) er
 	edit.ReplyMarkup = &empty
 	_, err := b.api.Send(edit)
 	return err
+}
+
+// DownloadFile fetches a Telegram file (by file_id) into memory, using the
+// bot's own HTTP client so it honours any configured proxy.
+func (b *Bot) DownloadFile(fileID string) ([]byte, error) {
+	url, err := b.api.GetFileDirectURL(fileID)
+	if err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := b.api.Client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download file: status %d", resp.StatusCode)
+	}
+	return io.ReadAll(resp.Body)
 }
 
 // AnswerCallback acknowledges a button press (optionally with a toast).
